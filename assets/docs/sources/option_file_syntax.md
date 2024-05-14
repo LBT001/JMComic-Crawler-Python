@@ -1,4 +1,4 @@
-# Option File Syntax
+# 配置文件指南
 
 ## 1. 配置前需知
 
@@ -13,12 +13,20 @@ from jmcomic import JmOption
 JmOption.default().to_file('./option.yml') # 创建默认option，导出为option.yml文件
 ```
 
-## 2. option常用配置项
+## 2. option常规配置项
 
 ```yml
+# 开启jmcomic的日志输出，默认为true
+# 对日志有需求的可进一步参考文档 → https://jmcomic.readthedocs.io/en/latest/tutorial/11_log_custom/
+log: true
+
 # 配置客户端相关
 client:
-  # impl: 客户端实现类，不配默认是html，表示网页端
+  # impl: 客户端实现类，不配置默认会使用JmModuleConfig.DEFAULT_CLIENT_IMPL
+  # 可配置:
+  #  html - 表示网页端
+  #  api - 表示APP端
+  # APP端不限ip兼容性好，网页端限制ip地区但效率高
   impl: html
 
   # domain: 域名配置，默认是 []，表示运行时自动获取域名。
@@ -30,6 +38,10 @@ client:
     - 18comic.vip
     - 18comic.org
 
+  # retry_times: 请求失败重试次数，默认为5
+  retry_times: 5
+
+  # postman: 请求配置
   postman:
     meta_data:
       # proxies: 代理配置，默认是 system，表示使用系统代理。
@@ -74,26 +86,32 @@ download:
 # 文件夹规则配置，决定图片文件存放在你的电脑上的哪个文件夹
 dir_rule:
   # base_dir: 根目录。
+  # 此配置也支持引用环境变量，例如
+  # base_dir: ${JM_DIR}/下载文件夹/
   base_dir: D:/a/b/c/
 
   # rule: 规则dsl。
   # 本项只建议了解编程的朋友定制，实现在这个类: jmcomic.jm_option.DirRule
   # 写法:
   # 1. 以'Bd'开头，表示根目录
-  # 2. 文件夹每增加一层，使用'_'区隔
-  # 3. 文件夹名字表示为 Pxxx/Ayyy，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。xxx和yyy可以写什么需要看源码。
-  # 下面是示例，表示使用禁漫网站的默认下载方式 [根目录 / 本子id / 章节序号 / 图片文件]
-  # rule: Bd_Aid_Pindex
+  # 2. 文件夹每增加一层，使用 '_' 或者 '/' 区隔
+  # 3. 用Pxxx或者Ayyy指代文件夹名，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。xxx和yyy可以写什么需要看源码。
+  # 
+  # 下面演示如果要使用禁漫网站的默认下载方式，该怎么写:
+  # 规则: 根目录 / 本子id / 章节序号 / 图片文件
+  # rule: 'Bd  / Aid   / Pindex'
+  # rule: 'Bd_Aid_Pindex'
 
   # 默认规则是: 根目录 / 章节标题 / 图片文件
   rule: Bd_Ptitle
 ```
 
-
 ## 3. option插件配置项
+
+* **插件配置中的kwargs参数支持引用环境变量，语法为 ${环境变量名}**
+
 ```yml
 # 插件的配置示例
-# 当kwargs的值为字符串类型时，支持使用环境变量，语法为 ${环境变量名}
 plugins:
   after_init:
     - plugin: usage_log # 实时打印硬件占用率的插件
@@ -109,27 +127,68 @@ plugins:
     - plugin: find_update # 只下载新章插件
       kwargs:
         145504: 290266 # 下载本子145504的章节290266以后的新章
-        
+
     - plugin: image_suffix_filter # 图片后缀过滤器插件，可以控制只下载哪些后缀的图片
       kwargs:
         allowed_orig_suffix: # 后缀列表，表示只想下载以.gif结尾的图片
-          - .gif 
+          - .gif
 
     - plugin: client_proxy # 客户端实现类代理插件，不建议非开发人员使用
       kwargs:
-        proxy_client_key: cl_proxy_future # 代理类的client_key
+        proxy_client_key: photo_concurrent_fetcher_proxy # 代理类的client_key
         whitelist: [ api, ] # 白名单，当client.impl匹配白名单时才代理
 
-    - plugin: auto_set_browser_cookies # 自动获取浏览器cookies，详见插件类
+    - plugin: auto_set_browser_cookies # 自动获取浏览器cookies，详见插件类代码→AutoSetBrowserCookiesPlugin
       kwargs:
         browser: chrome
         domain: 18comic.vip
+    
+    # v2.5.0 引入的插件
+    # 可以启动一个服务器，可以在浏览器上查看本子
+    # 基于flask框架，需要安装额外库: [pip install plugin_jm_server]
+    # 源码：https://github.com/hect0x7/plugin-jm-server
+    - plugin: jm_server 
+      kwargs:
+        password: '3333' # 服务器访问密码
+        base_dir: D:/a/b/c/ # 根目录，默认使用dir_rule.base_dir
+        
+        # 下面是高级配置，不配置也可以
+        
+        # run下的参数是flask框架的app对象的run方法参数，详见flask文档
+        run:
+          host: 0.0.0.0 # 默认接收所有ip的请求
+          port: 80 # 服务器端口，默认为80
+          debug: false # 是否开启debug模式，默认为false
+          
+        # 支持重写背景图片，可以使用你喜欢的背景图片作为背景
+        img_overwrite:
+          bg.jpg: D:/浏览器的背景图
+          m_bg.jpeg: D:/移动设备浏览器的背景图
+
+    - plugin: subscribe_album_update # 自动订阅本子并下载、发送邮件通知的插件
+      kwargs:
+        download_if_has_update: true
+        email_notify: # 参数说明见下【发送qq邮件插件】
+          msg_from: aaa@qq.com
+          msg_to: aaa@qq.com
+          password: dkjlakdjlkas
+          title: album update !!!
+          content: album update !!!
+        album_photo_dict:
+          324930: 424507
 
   after_album:
     - plugin: zip # 压缩文件插件
       kwargs:
         level: photo # 按照章节，一个章节一个压缩文件
+        # level 也可以配成 album，表示一个本子对应一个压缩文件，该压缩文件会包含这个本子的所有章节
+
         filename_rule: Ptitle # 压缩文件的命名规则
+        # 请注意⚠ [https://github.com/hect0x7/JMComic-Crawler-Python/issues/223#issuecomment-2045227527]
+        # filename_rule和level有对应关系
+        # 如果level=[photo], filename_rule只能写Pxxx
+        # 如果level=[album], filename_rule只能写Axxx
+
         zip_dir: D:/jmcomic/zip/ # 压缩文件存放的文件夹
         delete_original_file: true # 压缩成功后，删除所有原文件和文件夹
 
@@ -145,15 +204,36 @@ plugins:
     - plugin: favorite_folder_export # 导出收藏夹插件
       log: false
       kwargs:
-        zip_enable: true # 对收藏夹进行压缩
+        zip_enable: true # 对导出文件进行压缩
         zip_filepath: ${JM_DOWNLOAD_DIR}/export.zip # 压缩文件路径
         zip_password: ${ZIP_PASSWORD} # 压缩密码
+  
+  before_photo:
+    - plugin: skip_photo_with_few_images # 跳过下载章节图片数量过少的章节。一些韩漫的章节是公告，没有实际内容，就可以用该插件来跳过下载这些章节。
+      kwargs:
+        at_least_image_count: 3 # 至少要有多少张图，才下载此章节
 
   after_photo:
-    - plugin: j2p # jpg图片合成为一个pdf插件
+    # 把章节的所有图片合并为一个pdf的插件
+    # 使用前需要安装依赖库: [pip install img2pdf]
+    - plugin: img2pdf
       kwargs:
-        pdf_dir: D:/pdf # pdf存放文件夹
+        pdf_dir: D:/pdf/ # pdf存放文件夹
+        filename_rule: Pid # pdf命名规则
+  
+    # 请注意⚠
+    # 下方的j2p插件的功能不如img2pdf插件，不建议使用。
+    # 如有图片转pdf的需求，直接使用img2pdf即可，下面的内容请忽略。
+
+    - plugin: j2p # 图片合并插件，可以将下载下来的jpg图片合成为一个pdf插件
+      # 请注意⚠ 该插件的使用前提是，下载下来的图片是jpg图片
+      # 因此，使用该插件前，需要有如下配置:（下载图片格式转为jpg，上文有解释过此配置）
+      # download:
+      #   image:
+      #     suffix: .jpg
+      kwargs:
+        pdf_dir: D:/pdf/ # pdf存放文件夹
         filename_rule: Pid # pdf命名规则
         quality: 100 # pdf质量，0 - 100
-
+  
 ```

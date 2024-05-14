@@ -2,16 +2,8 @@ from common import time_stamp, str_to_list, field_cache, ProxyBuilder
 
 
 def default_jm_logging(topic: str, msg: str):
-    from common import format_ts
-    print(f'{format_ts()}:【{topic}】{msg}')
-
-
-def default_raise_exception_executor(msg, _extra):
-    raise JmModuleConfig.CLASS_EXCEPTION(msg)
-
-
-class JmcomicException(Exception):
-    pass
+    from common import format_ts, current_thread
+    print('[{}] [{}]:【{}】{}'.format(format_ts(), current_thread().name, topic, msg))
 
 
 # 禁漫常量
@@ -32,17 +24,18 @@ class JmMagicConstants:
     TIME_MONTH = 'm'
     TIME_ALL = 'a'
 
-    # 全部, 同人, 单本, 短篇, 其他, 韩漫, 美漫, cosplay, 3D
-    # category = ["0", "doujin", "single", "short", "another", "hanman", "meiman", "doujin_cosplay", "3D"]
-    CATEGORY_ALL = '0'
-    CATEGORY_DOUJIN = 'doujin'
-    CATEGORY_SINGLE = 'single'
-    CATEGORY_SHORT = 'short'
-    CATEGORY_ANOTHER = 'another'
-    CATEGORY_HANMAN = 'hanman'
-    CATEGORY_MEIMAN = 'meiman'
-    CATEGORY_DOUJIN_COSPLAY = 'doujin_cosplay'
-    CATEGORY_3D = '3D'
+    # 分类参数API接口的category
+    CATEGORY_ALL = '0'  # 全部
+    CATEGORY_DOUJIN = 'doujin'  # 同人
+    CATEGORY_SINGLE = 'single'  # 单本
+    CATEGORY_SHORT = 'short'  # 短篇
+    CATEGORY_ANOTHER = 'another'  # 其他
+    CATEGORY_HANMAN = 'hanman'  # 韩漫
+    CATEGORY_MEIMAN = 'meiman'  # 美漫
+    CATEGORY_DOUJIN_COSPLAY = 'doujin_cosplay'  # cosplay
+    CATEGORY_3D = '3D'  # 3D
+    CATEGORY_ENGLISH_SITE = 'english_site'  # 英文站
+    CATEGORY_JM_TEAM = '禁漫漢化組'
 
     # 分页大小
     PAGE_SIZE_SEARCH = 80
@@ -60,10 +53,10 @@ class JmMagicConstants:
     APP_TOKEN_SECRET = '18comicAPP'
     APP_TOKEN_SECRET_2 = '18comicAPPContent'
     APP_DATA_SECRET = '185Hcomic3PAPP7R'
-    APP_VERSION = '1.6.4'
+    APP_VERSION = '1.6.7'
     APP_HEADERS_TEMPLATE = {
         'Accept-Encoding': 'gzip',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.09211555; wv) AppleWebKit/537.36 (KHTML, '
+        'user-agent': 'Mozilla/5.0 (Linux; Android 9; V1938CT Build/PQ3A.190705.11211812; wv) AppleWebKit/537.36 (KHTML, '
                       'like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36',
     }
 
@@ -89,7 +82,7 @@ class JmModuleConfig:
     # 网站相关
     PROT = "https://"
     JM_REDIRECT_URL = f'{PROT}jm365.work/3YeBdF'  # 永久網域，怕走失的小伙伴收藏起来
-    JM_PUB_URL = f'{PROT}jmcomic.ltd'
+    JM_PUB_URL = f'{PROT}jmcomic-fb.vip'
     JM_CDN_IMAGE_URL_TEMPLATE = PROT + 'cdn-msp.{domain}/media/photos/{photo_id}/{index:05}{suffix}'  # index 从1开始
     JM_IMAGE_SUFFIX = ['.jpg', '.webp', '.png', '.gif']
 
@@ -114,23 +107,17 @@ class JmModuleConfig:
 
     # 移动端图片域名
     DOMAIN_IMAGE_LIST = str_to_list('''
-    cdn-msp.jmapiproxy1.monster
-    cdn-msp2.jmapiproxy1.monster
-    cdn-msp.jmapiproxy1.cc
-    cdn-msp.jmapiproxy2.cc
-    cdn-msp.jmapiproxy3.cc
-    cdn-msp.jmapiproxy4.cc
+    cdn-msp.jmapinodeudzn.net
+    cdn-msp2.jmapinodeudzn.net
 
     ''')
 
     # 移动端API域名
     DOMAIN_API_LIST = str_to_list('''
-    www.jmapinode1.top
-    www.jmapinode2.top
-    www.jmapinode3.top
+    www.jmapinodeudzn.xyz
+    www.jmapinode.vip
     www.jmapinode.biz
-    www.jmapinode.top
-    
+    www.jmapinode.xyz
     ''')
 
     # 网页端域名配置
@@ -147,33 +134,40 @@ class JmModuleConfig:
     CLASS_ALBUM = None
     CLASS_PHOTO = None
     CLASS_IMAGE = None
-    CLASS_EXCEPTION = JmcomicException
+
     # 客户端注册表
     REGISTRY_CLIENT = {}
     # 插件注册表
     REGISTRY_PLUGIN = {}
+    # 异常监听器
+    # key: 异常类
+    # value: 函数，参数只有异常对象，无需返回值
+    # 这个异常类（或者这个异常的子类）的实例将要被raise前，你的listener方法会被调用
+    REGISTRY_EXCEPTION_LISTENER = {}
 
     # 执行log的函数
-    executor_log = default_jm_logging
-    # 网页正则表达式解析失败时，执行抛出异常的函数，可以替换掉用于log
-    executor_raise_exception = default_raise_exception_executor
+    EXECUTOR_LOG = default_jm_logging
 
     # 使用固定时间戳
-    flag_use_fix_timestamp = True
+    FLAG_USE_FIX_TIMESTAMP = True
     # 移动端Client初始化cookies
-    flag_api_client_require_cookies = True
+    FLAG_API_CLIENT_REQUIRE_COOKIES = True
     # log开关标记
-    flag_enable_jm_log = True
+    FLAG_ENABLE_JM_LOG = True
     # log时解码url
-    flag_decode_url_when_logging = True
+    FLAG_DECODE_URL_WHEN_LOGGING = True
     # 当内置的版本号落后时，使用最新的禁漫app版本号
-    flag_use_version_newer_if_behind = False
+    FLAG_USE_VERSION_NEWER_IF_BEHIND = True
 
     # 关联dir_rule的自定义字段与对应的处理函数
     # 例如:
     # Amyname -> JmModuleConfig.AFIELD_ADVICE['myname'] = lambda album: "自定义名称"
     AFIELD_ADVICE = dict()
     PFIELD_ADVICE = dict()
+
+    # 当发生 oserror: [Errno 36] File name too long 时，
+    # 把文件名限制在指定个字符以内
+    VAR_FILE_NAME_LENGTH_LIMIT = 100
 
     @classmethod
     def downloader_class(cls):
@@ -271,6 +265,41 @@ class JmModuleConfig:
         return domain_list
 
     @classmethod
+    def get_html_domain_all_via_github(cls,
+                                       postman=None,
+                                       template='https://jmcmomic.github.io/go/{}.html',
+                                       index_range=(300, 309)
+                                       ):
+        """
+        通过禁漫官方的github号的repo获取最新的禁漫域名
+        https://github.com/jmcmomic/jmcmomic.github.io
+        """
+        postman = postman or cls.new_postman(headers={
+            'authority': 'github.com',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 '
+                          'Safari/537.36'
+        })
+        domain_set = set()
+
+        def fetch_domain(url):
+            resp = postman.get(url, allow_redirects=False)
+            text = resp.text
+            from .jm_toolkit import JmcomicText
+            for domain in JmcomicText.analyse_jm_pub_html(text):
+                if domain.startswith('jm365'):
+                    continue
+                domain_set.add(domain)
+
+        from common import multi_thread_launcher
+
+        multi_thread_launcher(
+            iter_objs=[template.format(i) for i in range(*index_range)],
+            apply_each_obj_func=fetch_domain,
+        )
+
+        return domain_set
+
+    @classmethod
     def new_html_headers(cls, domain='18comic.vip'):
         """
         网页端的headers
@@ -294,12 +323,12 @@ class JmModuleConfig:
     # noinspection PyUnusedLocal
     @classmethod
     def jm_log(cls, topic: str, msg: str):
-        if cls.flag_enable_jm_log is True:
-            cls.executor_log(topic, msg)
+        if cls.FLAG_ENABLE_JM_LOG is True:
+            cls.EXECUTOR_LOG(topic, msg)
 
     @classmethod
     def disable_jm_log(cls):
-        cls.flag_enable_jm_log = False
+        cls.FLAG_ENABLE_JM_LOG = False
 
     @classmethod
     def new_postman(cls, session=False, **kwargs):
@@ -319,10 +348,10 @@ class JmModuleConfig:
     # 而如果只想修改几个简单常用的配置，也可以下方的DEFAULT_XXX属性
     JM_OPTION_VER = '2.1'
     DEFAULT_CLIENT_IMPL = 'api'  # 默认Client实现类型为网页端
-    DEFAULT_CLIENT_CACHE = True  # 默认开启Client缓存，缓存级别是level_option，详见CacheRegistry
+    DEFAULT_CLIENT_CACHE = None  # 默认关闭Client缓存。缓存的配置详见 CacheRegistry
     DEFAULT_PROXIES = ProxyBuilder.system_proxy()  # 默认使用系统代理
 
-    default_option_dict: dict = {
+    DEFAULT_OPTION_DICT: dict = {
         'log': None,
         'dir_rule': {'rule': 'Bd_Pname', 'base_dir': None},
         'download': {
@@ -362,11 +391,11 @@ class JmModuleConfig:
         """
         from copy import deepcopy
 
-        option_dict = deepcopy(cls.default_option_dict)
+        option_dict = deepcopy(cls.DEFAULT_OPTION_DICT)
 
         # log
         if option_dict['log'] is None:
-            option_dict['log'] = cls.flag_enable_jm_log
+            option_dict['log'] = cls.FLAG_ENABLE_JM_LOG
 
         # dir_rule.base_dir
         dir_rule = option_dict['dir_rule']
@@ -410,6 +439,10 @@ class JmModuleConfig:
         ExceptionTool.require_true(getattr(client_class, 'client_key', None) is not None,
                                    f'未配置client_key, class: {client_class}')
         cls.REGISTRY_CLIENT[client_class.client_key] = client_class
+
+    @classmethod
+    def register_exception_listener(cls, etype, listener):
+        cls.REGISTRY_EXCEPTION_LISTENER[etype] = listener
 
 
 jm_log = JmModuleConfig.jm_log

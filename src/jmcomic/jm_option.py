@@ -17,7 +17,11 @@ class CacheRegistry:
         return registry[client]
 
     @classmethod
-    def enable_client_cache_on_condition(cls, option: 'JmOption', client: JmcomicClient, cache: Union[None, bool, str, Callable]):
+    def enable_client_cache_on_condition(cls,
+                                         option: 'JmOption',
+                                         client: JmcomicClient,
+                                         cache: Union[None, bool, str, Callable],
+                                         ):
         """
         cache parameter
 
@@ -101,13 +105,11 @@ class DirRule:
         解析下载路径dsl，得到一个路径规则解析列表
         """
 
-        if '_' not in rule_dsl and rule_dsl != 'Bd':
-            ExceptionTool.raises(f'不支持的dsl: "{rule_dsl}"')
-
-        rule_list = rule_dsl.split('_')
+        rule_list = self.split_rule_dsl(rule_dsl)
         solver_ls: List[DirRule.RuleSolver] = []
 
         for rule in rule_list:
+            rule = rule.strip()
             if rule == 'Bd':
                 solver_ls.append((0, lambda _: base_dir, 'Bd'))
                 continue
@@ -119,6 +121,19 @@ class DirRule:
             solver_ls.append(rule_solver)
 
         return solver_ls
+
+    # noinspection PyMethodMayBeStatic
+    def split_rule_dsl(self, rule_dsl: str) -> List[str]:
+        if rule_dsl == 'Bd':
+            return [rule_dsl]
+
+        if '/' in rule_dsl:
+            return rule_dsl.split('/')
+
+        if '_' in rule_dsl:
+            return rule_dsl.split('_')
+
+        ExceptionTool.raises(f'不支持的rule配置: "{rule_dsl}"')
 
     @classmethod
     def get_rule_solver(cls, rule: str) -> Optional[RuleSolver]:
@@ -132,7 +147,9 @@ class DirRule:
 
         # Axxx or Pyyy
         key = 1 if rule[0] == 'A' else 2
-        solve_func = lambda detail, ref=rule[1:]: fix_windir_name(str(DetailEntity.get_dirname(detail, ref)))
+
+        def solve_func(detail):
+            return fix_windir_name(str(DetailEntity.get_dirname(detail, rule[1:])))
 
         # 保存缓存
         rule_solver = (key, solve_func, rule)
@@ -175,19 +192,37 @@ class JmOption:
                  client: Dict,
                  plugins: Dict,
                  filepath=None,
+                 call_after_init_plugin=True,
                  ):
         # 路径规则配置
         self.dir_rule = DirRule(**dir_rule)
         # 客户端配置
-        self.client = AdvancedEasyAccessDict(client)
+        self.client = AdvancedDict(client)
         # 下载配置
-        self.download = AdvancedEasyAccessDict(download)
+        self.download = AdvancedDict(download)
         # 插件配置
-        self.plugins = AdvancedEasyAccessDict(plugins)
+        self.plugins = AdvancedDict(plugins)
         # 其他配置
         self.filepath = filepath
 
-        self.call_all_plugin('after_init', safe=True)
+        # 需要主线程等待完成的插件
+        self.need_wait_plugins = []
+
+        if call_after_init_plugin:
+            self.call_all_plugin('after_init', safe=True)
+
+    def copy_option(self):
+        return self.__class__(
+            dir_rule={
+                'rule': self.dir_rule.rule_dsl,
+                'base_dir': self.dir_rule.base_dir,
+            },
+            download=self.download.src_dict,
+            client=self.client.src_dict,
+            plugins=self.plugins.src_dict,
+            filepath=self.filepath,
+            call_after_init_plugin=False
+        )
 
     """
     下面是decide系列方法，为了支持重写和增加程序动态性。
@@ -200,28 +235,6 @@ class JmOption:
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
     def decide_photo_batch_count(self, album: JmAlbumDetail):
         return self.download.threading.photo
-
-    def decide_album_dir(self, album: JmAlbumDetail) -> str:
-        """
-        该方法目前仅在 plugin-zip 中使用，不建议外部调用
-        """
-        dir_layer = []
-        dir_rule = self.dir_rule
-        for rule in dir_rule.rule_dsl.split('_'):
-            if rule == 'Bd':
-                dir_layer.append(dir_rule.base_dir)
-                continue
-
-            if rule[0] == 'A':
-                name = dir_rule.apply_rule_directly(album, None, rule)
-                dir_layer.append(name)
-
-            if rule[0] == 'P':
-                break
-
-        from os.path import join
-        # noinspection PyTypeChecker
-        return join(*dir_layer)
 
     # noinspection PyMethodMayBeStatic
     def decide_image_filename(self, image: JmImageDetail) -> str:
@@ -250,7 +263,15 @@ class JmOption:
         )
 
         if ensure_exists:
-            mkdir_if_not_exists(save_dir)
+            try:
+                mkdir_if_not_exists(save_dir)
+            except OSError as e:
+                if e.errno == 36:
+                    # 目录名过长
+                    limit = JmModuleConfig.VAR_FILE_NAME_LENGTH_LIMIT
+                    jm_log('error', f'目录名过长，无法创建目录，强制缩短到{limit}个字符并重试')
+                    save_dir = save_dir[0:limit]
+                    mkdir_if_not_exists(save_dir)
 
         return save_dir
 
@@ -324,7 +345,7 @@ class JmOption:
     def deconstruct(self) -> Dict:
         return {
             'version': JmModuleConfig.JM_OPTION_VER,
-            'log': JmModuleConfig.flag_enable_jm_log,
+            'log': JmModuleConfig.FLAG_ENABLE_JM_LOG,
             'dir_rule': {
                 'rule': self.dir_rule.rule_dsl,
                 'base_dir': self.dir_rule.base_dir,
@@ -341,6 +362,7 @@ class JmOption:
     @classmethod
     def from_file(cls, filepath: str) -> 'JmOption':
         dic: dict = PackerUtil.unpack(filepath)[0]
+        dic.setdefault('filepath', filepath)
         return cls.construct(dic)
 
     def to_file(self, filepath=None):
@@ -364,7 +386,7 @@ class JmOption:
         """
         return self.new_jm_client(**kwargs)
 
-    def new_jm_client(self, domain_list=None, impl=None, cache=None, **kwargs) -> JmcomicClient:
+    def new_jm_client(self, domain_list=None, impl=None, cache=None, **kwargs) -> Union[JmHtmlClient, JmApiClient]:
         """
         创建新的Client（客户端），不同Client之间的元数据不共享
         """
@@ -430,6 +452,7 @@ class JmOption:
         # enable cache
         CacheRegistry.enable_client_cache_on_condition(self, client, cache)
 
+        # noinspection PyTypeChecker
         return client
 
     def update_cookies(self, cookies: dict):
@@ -443,7 +466,8 @@ class JmOption:
 
     # noinspection PyMethodMayBeStatic
     def decide_client_domain(self, client_key: str) -> List[str]:
-        is_client_type = lambda ctype: self.client_key_is_given_type(client_key, ctype)
+        def is_client_type(ctype) -> bool:
+            return self.client_key_is_given_type(client_key, ctype)
 
         if is_client_type(JmApiClient):
             # 移动端
@@ -507,19 +531,19 @@ class JmOption:
         plugin_registry = JmModuleConfig.REGISTRY_PLUGIN
         for pinfo in plugin_list:
             key, kwargs = pinfo['plugin'], pinfo.get('kwargs', None)  # kwargs为None
-            plugin_class: Optional[Type[JmOptionPlugin]] = plugin_registry.get(key, None)
+            pclass: Optional[Type[JmOptionPlugin]] = plugin_registry.get(key, None)
 
-            ExceptionTool.require_true(plugin_class is not None, f'[{group}] 未注册的plugin: {key}')
+            ExceptionTool.require_true(pclass is not None, f'[{group}] 未注册的plugin: {key}')
 
             try:
-                self.invoke_plugin(plugin_class, kwargs, extra, pinfo)
+                self.invoke_plugin(pclass, kwargs, extra, pinfo)
             except BaseException as e:
                 if safe is True:
                     traceback_print_exec()
                 else:
                     raise e
 
-    def invoke_plugin(self, plugin_class, kwargs: Optional[Dict], extra: dict, pinfo: dict):
+    def invoke_plugin(self, pclass, kwargs: Optional[Dict], extra: dict, pinfo: dict):
         # 检查插件的参数类型
         kwargs = self.fix_kwargs(kwargs)
         # 把插件的配置数据kwargs和附加数据extra合并，extra会覆盖kwargs
@@ -529,35 +553,36 @@ class JmOption:
         # 保证 jm_plugin.py 被加载
         from .jm_plugin import JmOptionPlugin, PluginValidationException
 
-        plugin = plugin_class
-        plugin_class: Type[JmOptionPlugin]
+        pclass: Type[JmOptionPlugin]
+        plugin: Optional[JmOptionPlugin] = None
 
         try:
             # 构建插件对象
-            plugin: JmOptionPlugin = plugin_class.build(self)
+            plugin: JmOptionPlugin = pclass.build(self)
 
             # 设置日志开关
             if pinfo.get('log', True) is not True:
                 plugin.log_enable = False
 
-            jm_log('plugin.invoke', f'调用插件: [{plugin_class.plugin_key}]')
+            jm_log('plugin.invoke', f'调用插件: [{pclass.plugin_key}]')
+
             # 调用插件功能
             plugin.invoke(**kwargs)
 
         except PluginValidationException as e:
             # 插件抛出的参数校验异常
-            self.handle_plugin_valid_exception(e, pinfo, kwargs, plugin)
+            self.handle_plugin_valid_exception(e, pinfo, kwargs, plugin, pclass)
 
         except JmcomicException as e:
             # 模块内部异常，通过不是插件抛出的，而是插件调用了例如Client，Client请求失败抛出的
-            self.handle_plugin_jmcomic_exception(e, pinfo, kwargs, plugin)
+            self.handle_plugin_jmcomic_exception(e, pinfo, kwargs, plugin, pclass)
 
         except BaseException as e:
             # 为插件兜底，捕获其他所有异常
-            self.handle_plugin_unexpected_error(e, pinfo, kwargs, plugin)
+            self.handle_plugin_unexpected_error(e, pinfo, kwargs, plugin, pclass)
 
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
-    def handle_plugin_valid_exception(self, e, pinfo: dict, kwargs: dict, plugin):
+    def handle_plugin_valid_exception(self, e, pinfo: dict, kwargs: dict, _plugin, _pclass):
         from .jm_plugin import PluginValidationException
         e: PluginValidationException
 
@@ -581,15 +606,15 @@ class JmOption:
         # 其他的mode可以通过继承+方法重写来扩展
 
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
-    def handle_plugin_unexpected_error(self, e, pinfo: dict, kwargs: dict, plugin):
+    def handle_plugin_unexpected_error(self, e, pinfo: dict, kwargs: dict, _plugin, pclass):
         msg = str(e)
-        jm_log('plugin.error', f'插件 [{plugin.plugin_key}]，运行遇到未捕获异常，异常信息: [{msg}]')
+        jm_log('plugin.error', f'插件 [{pclass.plugin_key}]，运行遇到未捕获异常，异常信息: [{msg}]')
         raise e
 
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
-    def handle_plugin_jmcomic_exception(self, e, pinfo: dict, kwargs: dict, plugin):
+    def handle_plugin_jmcomic_exception(self, e, pinfo: dict, kwargs: dict, _plugin, pclass):
         msg = str(e)
-        jm_log('plugin.exception', f'插件 [{plugin.plugin_key}] 调用失败，异常信息: [{msg}]')
+        jm_log('plugin.exception', f'插件 [{pclass.plugin_key}] 调用失败，异常信息: [{msg}]')
         raise e
 
     # noinspection PyMethodMayBeStatic
@@ -630,3 +655,9 @@ class JmOption:
             )
 
         return new_kwargs
+
+    def wait_all_plugins_finish(self):
+        from .jm_plugin import JmOptionPlugin
+        for plugin in self.need_wait_plugins:
+            plugin: JmOptionPlugin
+            plugin.wait_until_finish()

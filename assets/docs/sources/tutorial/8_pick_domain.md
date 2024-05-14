@@ -45,7 +45,7 @@ print(f'获取到{len(domain_set)}个域名，开始测试')
 
 
 def test_domain(domain: str):
-    client = option.new_jm_client(domain_list=[domain], **meta_data)
+    client = option.new_jm_client(impl='html', domain_list=[domain], **meta_data)
     status = 'ok'
 
     try:
@@ -67,3 +67,15 @@ for domain, status in domain_status_dict.items():
 
 ```
 
+# 程序输出示例
+
+```text
+获取到7个域名，开始测试
+18comic.vip: ok
+18comic.org: ok
+18comic-palworld.vip: ok
+18comic-c.art: ok
+jmcomic1.me: ok
+jmcomic.me: ok
+18comic-palworld.club: ok
+```

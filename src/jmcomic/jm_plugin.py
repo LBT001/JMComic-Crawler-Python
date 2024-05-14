@@ -94,6 +94,15 @@ class JmOptionPlugin:
         import subprocess
         subprocess.run(cmd, shell=True, check=True)
 
+    def enter_wait_list(self):
+        self.option.need_wait_plugins.append(self)
+
+    def leave_wait_list(self):
+        self.option.need_wait_plugins.remove(self)
+
+    def wait_until_finish(self):
+        pass
+
 
 class JmLoginPlugin(JmOptionPlugin):
     """
@@ -289,31 +298,23 @@ class ZipPlugin(JmOptionPlugin):
 
         # 原文件夹 -> zip文件
         dir_zip_dict: Dict[str, Optional[str]] = {}
-        photo_dict = downloader.all_downloaded[album]
+        photo_dict = downloader.download_success_dict[album]
 
         if level == 'album':
             zip_path = self.get_zip_path(album, None, filename_rule, suffix, zip_dir)
-            dir_path = self.zip_album(album, photo_dict, zip_path)
-            if dir_path is not None:
-                # 要删除这个album文件夹
-                dir_zip_dict[dir_path] = zip_path
-                # 也要删除album下的photo文件夹
-                for d in files_of_dir(dir_path):
-                    dir_zip_dict[d] = None
+            self.zip_album(album, photo_dict, zip_path, dir_zip_dict)
 
         elif level == 'photo':
             for photo, image_list in photo_dict.items():
                 zip_path = self.get_zip_path(None, photo, filename_rule, suffix, zip_dir)
-                dir_path = self.zip_photo(photo, image_list, zip_path)
-                if dir_path is not None:
-                    dir_zip_dict[dir_path] = zip_path
+                self.zip_photo(photo, image_list, zip_path, dir_zip_dict)
 
         else:
             ExceptionTool.raises(f'Not Implemented Zip Level: {level}')
 
         self.after_zip(dir_zip_dict)
 
-    def zip_photo(self, photo, image_list: list, zip_path: str) -> Optional[str]:
+    def zip_photo(self, photo, image_list: list, zip_path: str, dir_zip_dict) -> Optional[str]:
         """
         压缩photo文件夹
         :returns: photo文件夹路径
@@ -324,57 +325,65 @@ class ZipPlugin(JmOptionPlugin):
 
         all_filepath = set(map(lambda t: self.unified_path(t[0]), image_list))
 
-        return self.do_zip(photo_dir,
-                           zip_path,
-                           all_filepath,
-                           f'压缩章节[{photo.photo_id}]成功 → {zip_path}',
-                           )
-
-    @staticmethod
-    def unified_path(f):
-        return fix_filepath(f, os.path.isdir(f))
-
-    def zip_album(self, album, photo_dict: dict, zip_path) -> Optional[str]:
-        """
-        压缩album文件夹
-        :returns: album文件夹路径
-        """
-        all_filepath: Set[str] = set()
-
-        def addpath(f):
-            all_filepath.update(set(f))
-
-        album_dir = self.option.decide_album_dir(album)
-        # addpath(self.option.decide_image_save_dir(photo) for photo in photo_dict.keys())
-        addpath(path for ls in photo_dict.values() for path, _ in ls)
-
-        return self.do_zip(album_dir,
-                           zip_path,
-                           all_filepath,
-                           msg=f'压缩本子[{album.album_id}]成功 → {zip_path}',
-                           )
-
-    def do_zip(self, source_dir, zip_path, all_filepath, msg):
         if len(all_filepath) == 0:
             self.log('无下载文件，无需压缩', 'skip')
             return None
 
         from common import backup_dir_to_zip
         backup_dir_to_zip(
-            source_dir,
+            photo_dir,
             zip_path,
             acceptor=lambda f: os.path.isdir(f) or self.unified_path(f) in all_filepath
         ).close()
 
-        self.log(msg, 'finish')
-        return self.unified_path(source_dir)
+        self.log(f'压缩章节[{photo.photo_id}]成功 → {zip_path}', 'finish')
+        dir_zip_dict[self.unified_path(photo_dir)] = zip_path
+
+    @staticmethod
+    def unified_path(f):
+        return fix_filepath(f, os.path.isdir(f))
+
+    def zip_album(self, album, photo_dict: dict, zip_path, dir_zip_dict) -> Optional[str]:
+        """
+        压缩album文件夹
+        :returns: album文件夹路径
+        """
+
+        # 所有下载了的图片文件的路径
+        all_filepath: Set[str] = set(path for ls in photo_dict.values() for path, _ in ls)
+
+        if len(all_filepath) == 0:
+            self.log('无下载文件，无需压缩', 'skip')
+            return
+
+        # 该本子的所有章节的图片所在文件夹
+        photo_dir_list = [self.option.decide_image_save_dir(photo) for photo in photo_dict.keys()]
+
+        # 压缩文件对象
+        from common import backup_dir_to_zip
+        import zipfile
+        zfile = zipfile.ZipFile(zip_path, 'w')
+
+        for photo_dir in photo_dir_list:
+            photo_dir = self.unified_path(photo_dir)
+            backup_dir_to_zip(
+                photo_dir,
+                zip_path,
+                zfile=zfile,
+                prefix=os.path.basename(photo_dir.rstrip('/')),
+                acceptor=lambda f: os.path.isdir(f) or self.unified_path(f) in all_filepath
+            )
+            dir_zip_dict[photo_dir] = zip_path
+
+        zfile.close()
+        self.log(f'压缩本子[{album.album_id}]成功 → {zip_path}', 'finish')
 
     def after_zip(self, dir_zip_dict: Dict[str, Optional[str]]):
         # 删除所有原文件
         dirs = sorted(dir_zip_dict.keys(), reverse=True)
         image_paths = [
             path
-            for photo_dict in self.downloader.all_downloaded.values()
+            for photo_dict in self.downloader.download_success_dict.values()
             for image_list in photo_dict.values()
             for path, image in image_list
         ]
@@ -400,14 +409,13 @@ class ClientProxyPlugin(JmOptionPlugin):
     def invoke(self,
                proxy_client_key,
                whitelist=None,
-               **kwargs,
+               **clazz_init_kwargs,
                ) -> None:
         if whitelist is not None:
             whitelist = set(whitelist)
 
         proxy_clazz = JmModuleConfig.client_impl_class(proxy_client_key)
-        clazz_init_kwargs = kwargs
-        new_jm_client = self.option.new_jm_client
+        new_jm_client: Callable = self.option.new_jm_client
 
         def hook_new_jm_client(*args, **kwargs):
             client = new_jm_client(*args, **kwargs)
@@ -437,9 +445,7 @@ class ImageSuffixFilterPlugin(JmOptionPlugin):
             if image.img_file_suffix not in allowed_suffix_set:
                 self.log(f'跳过下载图片: {image.tag}，'
                          f'因为其后缀\'{image.img_file_suffix}\'不在允许的后缀集合{allowed_suffix_set}内')
-                # hook is_exists True to skip download
-                image.is_exists = True
-                return True
+                image.skip = True
 
             # let option decide
             return option_decide_cache(image)
@@ -476,7 +482,7 @@ class LogTopicFilterPlugin(JmOptionPlugin):
         if whitelist is not None:
             whitelist = set(whitelist)
 
-        old_jm_log = JmModuleConfig.executor_log
+        old_jm_log = JmModuleConfig.EXECUTOR_LOG
 
         def new_jm_log(topic, msg):
             if whitelist is not None and topic not in whitelist:
@@ -484,7 +490,7 @@ class LogTopicFilterPlugin(JmOptionPlugin):
 
             old_jm_log(topic, msg)
 
-        JmModuleConfig.executor_log = new_jm_log
+        JmModuleConfig.EXECUTOR_LOG = new_jm_log
 
 
 class AutoSetBrowserCookiesPlugin(JmOptionPlugin):
@@ -691,14 +697,14 @@ class ConvertJpgToPdfPlugin(JmOptionPlugin):
                filename_rule='Pid',
                quality=100,
                delete_original_file=False,
-               overwrite_cmd=None,
-               overwrite_jpg=None,
+               override_cmd=None,
+               override_jpg=None,
                **kwargs,
                ):
         self.delete_original_file = delete_original_file
 
         # 检查图片后缀配置
-        suffix = overwrite_jpg or '.jpg'
+        suffix = override_jpg or '.jpg'
         self.check_image_suffix_is_valid(suffix)
 
         # 处理文件夹配置
@@ -717,7 +723,7 @@ class ConvertJpgToPdfPlugin(JmOptionPlugin):
         # 生成命令
         def generate_cmd():
             return (
-                    overwrite_cmd or
+                    override_cmd or
                     'magick convert -quality {quality} "{photo_dir}*{suffix}" "{pdf_filepath}"'
             ).format(
                 quality=quality,
@@ -733,7 +739,7 @@ class ConvertJpgToPdfPlugin(JmOptionPlugin):
         ExceptionTool.require_true(
             code == 0,
             'jpg图片合并为pdf失败！'
-            '请确认你是否安装了magick，安装网站: [http://www.imagemagick.org/]',
+            '请确认你是否安装了magick，安装网站: [https://www.imagemagick.org/]',
         )
 
         self.log(f'Convert Successfully: JM{photo.id} → {pdf_filepath}')
@@ -744,8 +750,288 @@ class ConvertJpgToPdfPlugin(JmOptionPlugin):
 
             paths = [
                 path
-                for path, image in downloader.all_downloaded[photo.from_album][photo]
+                for path, image in downloader.download_success_dict[photo.from_album][photo]
             ]
 
             paths.append(self.option.decide_image_save_dir(photo, ensure_exists=False))
             self.execute_deletion(paths)
+
+
+class Img2pdfPlugin(JmOptionPlugin):
+    plugin_key = 'img2pdf'
+
+    def invoke(self,
+               photo: JmPhotoDetail,
+               downloader=None,
+               pdf_dir=None,
+               filename_rule='Pid',
+               delete_original_file=False,
+               **kwargs,
+               ):
+        try:
+            import img2pdf
+        except ImportError:
+            self.warning_lib_not_install('img2pdf')
+            return
+
+        self.delete_original_file = delete_original_file
+
+        # 处理文件夹配置
+        filename = DirRule.apply_rule_directly(None, photo, filename_rule)
+        photo_dir = self.option.decide_image_save_dir(photo)
+
+        # 处理生成的pdf文件的路径
+        if pdf_dir is None:
+            pdf_dir = photo_dir
+        else:
+            pdf_dir = fix_filepath(pdf_dir, True)
+            mkdir_if_not_exists(pdf_dir)
+
+        pdf_filepath = os.path.join(pdf_dir, f'{filename}.pdf')
+
+        # 调用 img2pdf 把 photo_dir 下的所有图片转为pdf
+        all_img = files_of_dir(photo_dir)
+        with open(pdf_filepath, 'wb') as f:
+            f.write(img2pdf.convert(all_img))
+
+        # 执行删除
+        self.log(f'Convert Successfully: JM{photo.id} → {pdf_filepath}')
+        all_img.append(self.option.decide_image_save_dir(photo, ensure_exists=False))
+        self.execute_deletion(all_img)
+
+
+class JmServerPlugin(JmOptionPlugin):
+    plugin_key = 'jm_server'
+
+    default_run_kwargs = {
+        'host': '0.0.0.0',
+        'port': '80',
+        'debug': False,
+    }
+
+    from threading import Lock
+    single_instance_lock = Lock()
+
+    def __init__(self, option: JmOption):
+        super().__init__(option)
+        self.run_server_lock = Lock()
+        self.running = False
+        self.server_thread: Optional[Thread] = None
+
+    def invoke(self,
+               password='',
+               base_dir=None,
+               album=None,
+               photo=None,
+               downloader=None,
+               run=None,
+               **kwargs
+               ):
+        """
+
+        :param password: 密码
+        :param base_dir: 初始访问服务器的根路径
+        :param album: 为了支持 after_album 这种调用时机
+        :param photo: 为了支持 after_album 这种调用时机
+        :param downloader: 为了支持 after_album 这种调用时机
+        :param run: 用于启动服务器: app.run(**run_kwargs)
+        :param kwargs: 用于JmServer构造函数: JmServer(base_dir, password, **kwargs)
+        """
+
+        if base_dir is None:
+            base_dir = self.option.dir_rule.base_dir
+
+        if run is None:
+            run = self.default_run_kwargs
+        else:
+            base_run_kwargs = self.default_run_kwargs.copy()
+            base_run_kwargs.update(run)
+            run = base_run_kwargs
+
+        if self.running is True:
+            return
+
+        with self.run_server_lock:
+            if self.running is True:
+                return
+
+            # 服务器的代码位于一个独立库：plugin_jm_server，需要独立安装
+            # 源代码仓库：https://github.com/hect0x7/plugin-jm-server
+            try:
+                import plugin_jm_server
+                self.log(f'当前使用plugin_jm_server版本: {plugin_jm_server.__version__}')
+            except ImportError:
+                self.warning_lib_not_install('plugin_jm_server')
+                return
+
+            # 核心函数，启动服务器，会阻塞当前线程
+            def blocking_run_server():
+                self.server_thread = current_thread()
+                self.enter_wait_list()
+                server = plugin_jm_server.JmServer(base_dir, password, **kwargs)
+                # run方法会阻塞当前线程直到flask退出
+                server.run(**run)
+
+            # 对于debug模式，特殊处理
+            if run['debug'] is True:
+                run.setdefault('use_reloader', False)
+
+                # debug模式只能在主线程启动，判断当前线程是不是主线程
+                if current_thread() is not threading.main_thread():
+                    # 不是主线程，return
+                    return self.warning_wrong_usage_of_debug()
+                else:
+                    self.running = True
+                    # 是主线程，启动服务器
+                    blocking_run_server()
+
+            else:
+                # 非debug模式，开新线程启动
+                threading.Thread(target=blocking_run_server, daemon=True).start()
+                atexit_register(self.wait_server_stop)
+                self.running = True
+
+    def warning_wrong_usage_of_debug(self):
+        self.log('注意！当配置debug=True时，请确保当前插件是在主线程中被调用。\n'
+                 '因为如果本插件配置在 [after_album/after_photo] 这种时机调用，\n'
+                 '会使得flask框架不在主线程debug运行，\n'
+                 '导致报错（ValueError: signal only works in main thread of the main interpreter）。\n',
+                 '【基于上述原因，当前线程非主线程，不启动服务器】'
+                 'warning'
+                 )
+
+    def wait_server_stop(self, proactive=False):
+        st = self.server_thread
+        if (
+                st is None
+                or st == current_thread()
+                or not st.is_alive()
+        ):
+            return
+
+        if proactive:
+            msg = f'[{self.plugin_key}]的服务器线程仍运行中，可按下ctrl+c结束程序'
+        else:
+            msg = f'主线程执行完毕，但插件[{self.plugin_key}]的服务器线程仍运行中，可按下ctrl+c结束程序'
+
+        self.log(msg, 'wait')
+
+        while st.is_alive():
+            try:
+                st.join(timeout=0.5)
+            except KeyboardInterrupt:
+                self.log('收到ctrl+c，结束程序', 'wait')
+                return
+
+    def wait_until_finish(self):
+        self.wait_server_stop(proactive=True)
+
+    @classmethod
+    def build(cls, option: JmOption) -> 'JmOptionPlugin':
+        """
+        单例模式
+        """
+        field_name = 'single_instance'
+
+        instance = getattr(cls, field_name, None)
+        if instance is not None:
+            return instance
+
+        with cls.single_instance_lock:
+            instance = getattr(cls, field_name, None)
+            if instance is not None:
+                return instance
+            instance = JmServerPlugin(option)
+            setattr(cls, field_name, instance)
+            return instance
+
+
+class SubscribeAlbumUpdatePlugin(JmOptionPlugin):
+    plugin_key = 'subscribe_album_update'
+
+    def invoke(self,
+               album_photo_dict=None,
+               email_notify=None,
+               download_if_has_update=True,
+               auto_update_after_download=True,
+               ) -> None:
+        if album_photo_dict is None:
+            return
+
+        album_photo_dict: Dict
+        for album_id, photo_id in album_photo_dict.copy().items():
+            # check update
+            try:
+                has_update, photo_new_list = self.check_photo_update(album_id, photo_id)
+            except JmcomicException as e:
+                self.log('Exception happened: ' + str(e), 'check_update.error')
+                continue
+
+            if has_update is False:
+                continue
+
+            self.log(f'album={album_id}，发现新章节: {photo_new_list}，准备开始下载')
+
+            # send email
+            try:
+                if email_notify:
+                    SendQQEmailPlugin.build(self.option).invoke(**email_notify)
+            except PluginValidationException:
+                # ignore
+                pass
+
+            # download new photo
+            if has_update and download_if_has_update:
+                self.option.download_photo(photo_new_list)
+
+            if auto_update_after_download:
+                album_photo_dict[album_id] = photo_new_list[-1]
+                self.option.to_file()
+
+    def check_photo_update(self, album_id: str, photo_id: str):
+        client = self.option.new_jm_client()
+        album = client.get_album_detail(album_id)
+
+        photo_new_list = []
+        is_new_photo = False
+        sentinel = int(photo_id)
+
+        for photo in album:
+            if is_new_photo:
+                photo_new_list.append(photo.photo_id)
+
+            if int(photo.photo_id) == sentinel:
+                is_new_photo = True
+
+        return len(photo_new_list) != 0, photo_new_list
+
+
+class SkipPhotoWithFewImagesPlugin(JmOptionPlugin):
+    plugin_key = 'skip_photo_with_few_images'
+
+    def invoke(self,
+               at_least_image_count: int,
+               photo: Optional[JmPhotoDetail] = None,
+               image: Optional[JmImageDetail] = None,
+               album: Optional[JmAlbumDetail] = None,
+               **kwargs
+               ):
+        self.try_mark_photo_skip_and_log(photo, at_least_image_count)
+        if image is not None:
+            self.try_mark_photo_skip_and_log(image.from_photo, at_least_image_count)
+
+    def try_mark_photo_skip_and_log(self, photo: JmPhotoDetail, at_least_image_count: int):
+        if photo is None:
+            return
+
+        if len(photo) >= at_least_image_count:
+            return
+
+        self.log(f'跳过下载章节: {photo.id} ({photo.album_id}[{photo.index}/{len(photo.from_album)}])，'
+                 f'因为其图片数: {len(photo)} < {at_least_image_count} (at_least_image_count)')
+        photo.skip = True
+
+    @classmethod
+    @field_cache()  # 单例
+    def build(cls, option: JmOption) -> 'JmOptionPlugin':
+        return super().build(option)

@@ -1,11 +1,14 @@
 from PIL import Image
 
-from .jm_entity import *
+from .jm_exception import *
 
 
 class JmcomicText:
     pattern_jm_domain = compile(r'https://([\w.-]+)')
-    pattern_jm_pa_id = compile(r'(photos?|album)/(\d+)')
+    pattern_jm_pa_id = [
+        (compile(r'(photos?|album)/(\d+)'), 2),
+        (compile(r'id=(\d+)'), 1),
+    ]
     pattern_html_jm_pub_domain = compile(r'[\w-]+\.\w+/?\w+')
 
     pattern_html_photo_photo_id = compile(r'<meta property="og:url" content=".*?/photo/(\d+)/?.*?">')
@@ -51,7 +54,7 @@ class JmcomicText:
     # 點擊喜歡
     pattern_html_album_likes = compile(r'<span id="albim_likes_\d+">(.*?)</span>')
     # 觀看
-    pattern_html_album_views = compile(r'<span>(.*?)</span>\n<span>(次觀看|观看次数)</span>')
+    pattern_html_album_views = compile(r'<span>(.*?)</span>\n *<span>(次觀看|观看次数)</span>')
     # 評論(div)
     pattern_html_album_comment_count = compile(r'<div class="badge"[^>]*?id="total_video_comments">(\d+)</div>'), 0
 
@@ -87,9 +90,13 @@ class JmcomicText:
             return text[2:]
         else:
             # https://xxx/photo/412038
-            match = cls.pattern_jm_pa_id.search(text)
-            ExceptionTool.require_true(match is not None, f"无法解析jm车号, 文本为: {text}")
-            return match[2]
+            # https://xxx/album/?id=412038
+            for p, i in cls.pattern_jm_pa_id:
+                match = p.search(text)
+                if match is not None:
+                    return match[i]
+
+            ExceptionTool.raises(f"无法解析jm车号, 文本为: {text}")
 
     @classmethod
     def analyse_jm_pub_html(cls, html: str, domain_keyword=('jm', 'comic')) -> List[str]:
@@ -162,7 +169,7 @@ class JmcomicText:
             if field_value is None:
                 if default is None:
                     ExceptionTool.raises_regex(
-                        f"文本没有匹配上字段：字段名为'{field_name}'，pattern: [{pattern}]" \
+                        f"文本没有匹配上字段：字段名为'{field_name}'，pattern: [{pattern}]"
                         + (f"\n响应文本=[{html}]" if len(html) < 200 else
                            f'响应文本过长(len={len(html)})，不打印'
                            ),
@@ -350,23 +357,16 @@ class JmPageTool:
     # 用来缩减html的长度
     pattern_html_search_shorten_for = compile(r'<div class="well well-sm">([\s\S]*)<div class="row">')
 
-    # 用来提取搜索页面的的album的信息
+    # 用来提取搜索页面的album的信息
     pattern_html_search_album_info_list = compile(
-        r'<a href="/album/(\d+)/.+"[\s\S]*?'
-        r'title="(.*?)"[\s\S]*?'
-        r'(<div class="label-category" style="">'
-        r'\n(.*)\n</div>\n<div class="label-sub" style=" ">'
-        r'(.*?)\n<[\s\S]*?)?'
-        r'<div class="title-truncate tags .*>\n'
-        r'(<a[\s\S]*?) </div>'
+        r'<a href="/album/(\d+)/[\s\S]*?title="(.*?)"([\s\S]*?)<div class="title-truncate tags .*>([\s\S]*?)</div>'
     )
 
-    # 用来提取分类页面的的album的信息
+    # 用来提取分类页面的album的信息
     pattern_html_category_album_info_list = compile(
-        r'<a href="/album/(\d+)/[^>]*>[\s\S]*?title="(.*?)"[^>]*>'
-        r'\n</a>\n'
-        r'<div class="label-loveicon">'
-        r'([\s\S]*?)'
+        r'<a href="/album/(\d+)/[^>]*>[^>]*?'
+        r'title="(.*?)"[^>]*>[ \n]*</a>[ \n]*'
+        r'<div class="label-loveicon">([\s\S]*?)'
         r'<div class="clearfix">'
     )
 
@@ -376,7 +376,7 @@ class JmPageTool:
     # 查找错误，例如 [错误，關鍵字過短，請至少輸入兩個字以上。]
     pattern_html_search_error = compile(r'<fieldset>\n<legend>(.*?)</legend>\n<div class=.*?>\n(.*?)\n</div>\n</fieldset>')
 
-    pattern_html_search_total = compile(r'<span class="text-white">(\d+)</span> A漫.'), 0
+    pattern_html_search_total = compile(r'class="text-white">(\d+)</span> A漫.'), 0
 
     # 收藏页面的本子结果
     pattern_html_favorite_content = compile(
@@ -417,7 +417,9 @@ class JmPageTool:
 
         album_info_list = cls.pattern_html_search_album_info_list.findall(html)
 
-        for (album_id, title, _, label_category, label_sub, tag_text) in album_info_list:
+        for (album_id, title, _label_category_text, tag_text) in album_info_list:
+            # 从label_category_text中可以解析出label-category和label-sub
+            # 这里不作解析，因为没什么用...
             tags = cls.pattern_html_search_tags.findall(tag_text)
             content.append((
                 album_id, {
@@ -470,7 +472,7 @@ class JmPageTool:
         return JmFavoritePage(content, folder_list, total)
 
     @classmethod
-    def parse_api_to_search_page(cls, data: DictModel) -> JmSearchPage:
+    def parse_api_to_search_page(cls, data: AdvancedDict) -> JmSearchPage:
         """
         model_data: {
           "search_query": "MANA",
@@ -499,7 +501,7 @@ class JmPageTool:
         return JmSearchPage(content, total)
 
     @classmethod
-    def parse_api_to_favorite_page(cls, data: DictModel) -> JmFavoritePage:
+    def parse_api_to_favorite_page(cls, data: AdvancedDict) -> JmFavoritePage:
         """
         {
           "list": [
@@ -544,7 +546,7 @@ class JmPageTool:
 
     @classmethod
     def adapt_content(cls, content):
-        def adapt_item(item: DictModel):
+        def adapt_item(item: AdvancedDict):
             item: dict = item.src_dict
             item.setdefault('tags', [])
             return item
@@ -671,7 +673,7 @@ class JmApiAdaptTool:
         series = data['series']
         episode_list = []
         for chapter in series:
-            chapter = DictModel(chapter)
+            chapter = AdvancedDict(chapter)
             # photo_id, photo_index, photo_title, photo_pub_date
             episode_list.append(
                 (chapter.id, chapter.sort, chapter.name, None)
@@ -686,7 +688,7 @@ class JmApiAdaptTool:
         sort = 1
         series: list = data['series']  # series中的sort从1开始
         for chapter in series:
-            chapter = DictModel(chapter)
+            chapter = AdvancedDict(chapter)
             if int(chapter.id) == int(data['id']):
                 sort = chapter.sort
                 break
@@ -712,7 +714,7 @@ class JmImageTool:
         if need_convert is False:
             cls.save_directly(resp, filepath)
         else:
-            cls.save_image(cls.open_Image(resp.content), filepath)
+            cls.save_image(cls.open_image(resp.content), filepath)
 
     @classmethod
     def save_image(cls, image: Image, filepath: str):
@@ -752,28 +754,39 @@ class JmImageTool:
 
         # 创建新的解密图片
         img_decode = Image.new("RGB", (w, h))
-        remainder = h % num
-        copyW = w
+        over = h % num
         for i in range(num):
-            copyH = math.floor(h / num)
-            py = copyH * i
-            y = h - (copyH * (i + 1)) - remainder
+            move = math.floor(h / num)
+            y_src = h - (move * (i + 1)) - over
+            y_dst = move * i
 
             if i == 0:
-                copyH += remainder
+                move += over
             else:
-                py += remainder
+                y_dst += over
 
             img_decode.paste(
-                img_src.crop((0, y, copyW, y + copyH)),
-                (0, py, copyW, py + copyH)
+                img_src.crop((
+                    0, y_src,
+                    w, y_src + move
+                )),
+                (
+                    0, y_dst,
+                    w, y_dst + move
+                )
             )
+
+            # save every step result
+            # cls.save_image(img_decode, change_file_name(
+            #     decoded_save_path,
+            #     f'{of_file_name(decoded_save_path, trim_suffix=True)}_{i}{of_file_suffix(decoded_save_path)}'
+            # ))
 
         # 保存到新的解密文件
         cls.save_image(img_decode, decoded_save_path)
 
     @classmethod
-    def open_Image(cls, fp: Union[str, bytes]):
+    def open_image(cls, fp: Union[str, bytes]):
         from io import BytesIO
         fp = fp if isinstance(fp, str) else BytesIO(fp)
         return Image.open(fp)
@@ -821,86 +834,6 @@ class JmImageTool:
         return cls.get_num(detail.scramble_id, detail.aid, detail.img_file_name)
 
 
-class ExceptionTool:
-    """
-    抛异常的工具
-    1: 能简化 if-raise 语句的编写
-    2: 有更好的上下文信息传递方式
-    """
-
-    EXTRA_KEY_RESP = 'resp'
-    EXTRA_KEY_HTML = 'html'
-    EXTRA_KEY_RE_PATTERN = 'pattern'
-
-    @classmethod
-    def raises(cls, msg: str, extra: dict = None):
-        if extra is None:
-            extra = {}
-
-        JmModuleConfig.executor_raise_exception(msg, extra)
-
-    @classmethod
-    def raises_regex(cls,
-                     msg: str,
-                     html: str,
-                     pattern: Pattern,
-                     ):
-        cls.raises(
-            msg, {
-                cls.EXTRA_KEY_HTML: html,
-                cls.EXTRA_KEY_RE_PATTERN: pattern,
-            }
-        )
-
-    @classmethod
-    def raises_resp(cls,
-                    msg: str,
-                    resp,
-                    ):
-        cls.raises(
-            msg, {
-                cls.EXTRA_KEY_RESP: resp
-            }
-        )
-
-    @classmethod
-    def raise_missing(cls,
-                      resp,
-                      orig_req_url=None,
-                      ):
-        """
-        抛出本子/章节的异常
-        :param resp: 响应对象
-        :param orig_req_url: 原始请求url，可不传
-        """
-        if orig_req_url is None:
-            orig_req_url = resp.url
-
-        req_type = "本子" if "album" in orig_req_url else "章节"
-        cls.raises_resp((
-            f'请求的{req_type}不存在！({orig_req_url})\n'
-            '原因可能为:\n'
-            f'1. id有误，检查你的{req_type}id\n'
-            '2. 该漫画只对登录用户可见，请配置你的cookies，或者使用移动端Client（api）\n'
-        ), resp)
-
-    @classmethod
-    def require_true(cls, case: bool, msg: str):
-        if case:
-            return
-
-        cls.raises(msg)
-
-    @classmethod
-    def replace_old_exception_executor(cls, raises: Callable[[Callable, str, dict], None]):
-        old = JmModuleConfig.executor_raise_exception
-
-        def new(msg, extra):
-            raises(old, msg, extra)
-
-        JmModuleConfig.executor_raise_exception = new
-
-
 class JmCryptoTool:
     """
     禁漫加解密相关逻辑
@@ -944,7 +877,7 @@ class JmCryptoTool:
         """
         解密接口返回值
 
-        :param data: data = resp.json()['data]
+        :param data: resp.json()['data']
         :param ts: 时间戳
         :param secret: 密钥
         :return: json格式的字符串

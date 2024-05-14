@@ -14,16 +14,26 @@
 
 本项目的核心功能是下载本子，基于此，设计了一套方便使用、便于扩展，能满足一些特殊下载需求的框架。
 
-除了下载功能以外，也实现了其他的一些禁漫接口，例如登录、搜索、收藏夹、分类、排行榜等等，按需实现。
+目前核心功能实现较为稳定，项目也处于维护阶段。
 
-目前核心功能实现较为稳定，项目也处于维护阶段（因为禁漫接口经常变动，需要经常维护）。
+除了下载功能以外，也实现了其他的一些禁漫接口，按需实现，具体如下。
+
+### 已实现的禁漫API：
+
+- 登录
+- 搜本
+- 分类 (排行榜)
+- 本子章节详情
+- 图片下载解码
+- 收藏夹
+- 移动端接口加解密
 
 ## 安装教程
 
 * 通过pip官方源安装（推荐，并且更新也是这个命令）
 
   ```shell
-  pip install jmcomic -i https://pypi.org/project --upgrade
+  pip install jmcomic -i https://pypi.org/project -U
   ```
 * 通过源代码安装
 
@@ -33,19 +43,57 @@
 
 ## 快速上手
 
-使用下面的两行代码，即可实现功能：把某个本子（album）里的所有章节（photo）下载到本地
-
+### 1. 下载本子方法
+只需要使用如下代码，就可以下载本子`JM422866`的所有章节的图片：
 ```python
 import jmcomic  # 导入此模块，需要先安装.
 jmcomic.download_album('422866')  # 传入要下载的album的id，即可下载整个album到本地.
 ```
 
-* v2.2.9: 新增命令行调用方式，上述的代码可以转为一行命令
+上面的 `download_album`方法还有一个参数`option`，可用于控制下载配置，配置包括禁漫域名、网络代理、图片格式转换、插件等等。
 
-```bash
-# 下载album_id为422866的本子
-$ jmcomic 422866
+你可能需要这些配置项。推荐使用配置文件创建option，用option下载本子，见下章：
+
+### 2. 使用option配置来下载本子
+
+1. 首先，创建一个配置文件，假设文件名为 `option.yml`
+   
+    该文件有特定的写法，你需要参考这个文档 → [option配置](./assets/docs/sources/option_file_syntax.md)
+    
+    下面做一个演示，假设你需要把下载的图片转为png格式，你应该把以下内容写进`option.yml`
+
+```yml
+download:
+  image:
+    suffix: .png # 该配置用于把下载的图片转为png格式
 ```
+
+2. 第二步，运行下面的python代码
+```python
+import jmcomic
+
+# 创建配置对象
+option = jmcomic.create_option_by_file('你的配置文件路径，例如 D:/option.yml')
+# 使用option对象来下载本子
+jmcomic.download_album(422866, option)
+```
+
+
+
+## 进阶使用
+
+文档网站：[jmcomic.readthedocs.io](https://jmcomic.readthedocs.io/en/latest)
+
+首先，就下载功能，jmcomic提供了很多配置项，大部分的下载需求你都可以通过上文介绍的配置文件来配置。
+
+如果你不满足于下载，还有其他的使用需求，推荐你先看看以下文档：
+
+* [jmcomic常用类和方法演示](assets/docs/sources/tutorial/0_demo.md)
+* [option配置文件语法（包含插件配置）](./assets/docs/sources/option_file_syntax.md)
+* [GitHub Actions使用教程](./assets/docs/sources/tutorial/1_github_actions.md)
+* [命令行使用教程](assets/docs/sources/tutorial/2_command_line.md)
+* [插件机制](assets/docs/sources/tutorial/6_plugin.md)
+* [下载过滤器机制](assets/docs/sources/tutorial/5_filter.md)
 
 ## 项目特点
 
@@ -69,8 +117,8 @@ $ jmcomic 422866
 - **可扩展性强**
 
     - 支持自定义本子/章节/图片下载前后的回调函数
-    - 支持自定义日志
     - 支持自定义类：`Downloader（负责调度）` `Option（负责配置）` `Client（负责请求）` `实体类`等
+    - 支持自定义日志、异常监听器
     - **支持Plugin插件，可以方便地扩展功能，以及使用别人的插件，目前内置插件有**：
         - `登录插件`
         - `硬件占用监控插件`
@@ -83,19 +131,6 @@ $ jmcomic 422866
         - `jpg图片合成为一个pdf插件`
         - `导出收藏夹为csv文件插件`
 
-## 进阶使用
-
-进阶使用请查阅文档：[文档](https://jmcomic.readthedocs.io/en/latest)
-
-下面列出一些常用的文档链接：
-
-* [option配置文件语法（包含插件配置）](./assets/docs/sources/option_file_syntax.md)
-* [常用类和方法演示（下载本子、获取实体类、搜索本子）](assets/docs/sources/tutorial/3_demo.md)
-* [命令行使用教程](assets/docs/sources/tutorial/2_command_line.md)
-* [GitHub Actions使用教程](./assets/docs/sources/tutorial/1_github_actions.md)
-* [插件机制](assets/docs/sources/tutorial/6_plugin.md)
-* [下载过滤器机制](assets/docs/sources/tutorial/5_filter.md)
-
 ## 使用小说明
 
 * Python >= 3.7
@@ -103,10 +138,11 @@ $ jmcomic 422866
 
 ## 项目文件夹介绍
 
+* .github：GitHub Actions配置文件
 * assets：存放一些非代码的资源文件
 
-    * config：存放配置文件
     * docs：项目文档
+    * option：存放配置文件
 
 * src：存放源代码
 

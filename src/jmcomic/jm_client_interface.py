@@ -6,8 +6,6 @@ Response Entity
 
 """
 
-DictModel = AdvancedEasyAccessDict
-
 
 class JmResp:
 
@@ -41,16 +39,15 @@ class JmResp:
 
     def require_success(self):
         if self.is_not_success:
-            ExceptionTool.raises_resp(self.text, self)
+            ExceptionTool.raises_resp(self.error_msg(), self)
+
+    def error_msg(self):
+        return self.text
 
 
 class JmImageResp(JmResp):
 
-    def require_success(self):
-        if self.is_not_success:
-            ExceptionTool.raises_resp(self.get_error_msg(), self)
-
-    def get_error_msg(self):
+    def error_msg(self):
         msg = f'禁漫图片获取失败: [{self.url}]'
         if self.http_code != 200:
             msg += f'，http状态码={self.http_code}'
@@ -77,7 +74,7 @@ class JmImageResp(JmResp):
             # 解密图片并保存文件
             JmImageTool.decode_and_save(
                 JmImageTool.get_num_by_url(scramble_id, img_url),
-                JmImageTool.open_Image(self.content),
+                JmImageTool.open_image(self.content),
                 path,
             )
 
@@ -86,10 +83,13 @@ class JmJsonResp(JmResp):
 
     @field_cache()
     def json(self) -> Dict:
-        return self.resp.json()
+        try:
+            return self.resp.json()
+        except Exception as e:
+            ExceptionTool.raises_resp(f'json解析失败: {e}', self, JsonResolveFailException)
 
-    def model(self) -> DictModel:
-        return DictModel(self.json())
+    def model(self) -> AdvancedDict:
+        return AdvancedDict(self.json())
 
 
 class JmApiResp(JmJsonResp):
@@ -118,9 +118,9 @@ class JmApiResp(JmJsonResp):
         return loads(self.decoded_data)
 
     @property
-    def model_data(self) -> DictModel:
+    def model_data(self) -> AdvancedDict:
         self.require_success()
-        return DictModel(self.res_data)
+        return AdvancedDict(self.res_data)
 
 
 # album-comment
@@ -467,11 +467,14 @@ class JmcomicClient(
     def of_api_url(self, api_path, domain):
         raise NotImplementedError
 
-    def get_html_domain(self, postman=None):
-        return JmModuleConfig.get_html_domain(postman or self.get_root_postman())
+    def get_html_domain(self):
+        return JmModuleConfig.get_html_domain(self.get_root_postman())
 
-    def get_html_domain_all(self, postman=None):
-        return JmModuleConfig.get_html_domain_all(postman or self.get_root_postman())
+    def get_html_domain_all(self):
+        return JmModuleConfig.get_html_domain_all(self.get_root_postman())
+
+    def get_html_domain_all_via_github(self):
+        return JmModuleConfig.get_html_domain_all_via_github(self.get_root_postman())
 
     # noinspection PyMethodMayBeStatic
     def do_page_iter(self, params: dict, page: int, get_page_method):
@@ -569,3 +572,15 @@ class JmcomicClient(
         }
 
         yield from self.do_page_iter(params, page, self.categories_filter)
+
+    def is_given_type(self, ctype: Type['JmcomicClient']) -> bool:
+        """
+        Client代理的此方法会被路由到内部client的方法
+        即：ClientProxy(AClient()).is_given_type(AClient) is True
+        但是: ClientProxy(AClient()).client_key != AClient.client_key
+        """
+        if isinstance(self, ctype):
+            return True
+        if self.client_key == instance.client_key:
+            return True
+        return False

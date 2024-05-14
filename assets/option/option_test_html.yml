@@ -11,6 +11,7 @@ client:
       timeout: 7
   domain:
     html:
+      - 18comic.org
       - jmcomic1.me
       - jmcomic.me
 
@@ -24,5 +25,5 @@ plugins:
 
     - plugin: client_proxy
       kwargs:
-        proxy_client_key: cl_proxy_future
+        proxy_client_key: photo_concurrent_fetcher_proxy
         whitelist: [ api, ]
